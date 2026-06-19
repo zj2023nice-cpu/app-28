@@ -18,10 +18,15 @@ export class PlayScene extends Phaser.Scene {
         this.zombieSpawnRate = config.zombieSpawnRate;
         this.zombiesSpawned = 0;
         this.zombiesTarget = config.waves;
+        this.plantCooldowns = {};
+        Object.keys(PLANTS).forEach(key => {
+            this.plantCooldowns[key] = 0;
+        });
     }
 
     create() {
         const { width, height } = this.scale;
+        this.game.canvas.oncontextmenu = (e) => e.preventDefault();
         this.drawBackground();
         this.createGrid();
 
@@ -32,10 +37,8 @@ export class PlayScene extends Phaser.Scene {
         this.bullets = this.physics.add.group();
         this.suns = this.add.group();
 
-        // Overlap detections
         this.physics.add.overlap(this.bullets, this.zombies, this.handleBulletHit, null, this);
 
-        // Particle Emitters for "Juice"
         this.createParticles();
 
         this.time.addEvent({
@@ -45,7 +48,17 @@ export class PlayScene extends Phaser.Scene {
             loop: true
         });
 
+        this.input.on('pointerdown', (pointer, gameObjects) => {
+            const isUIArea = pointer.y < 120;
+            if (pointer.rightButtonDown()) {
+                this.registry.set('selectedPlant', null);
+            } else if (pointer.leftButtonDown() && gameObjects.length === 0 && !isUIArea) {
+                this.registry.set('selectedPlant', null);
+            }
+        });
+
         this.registry.set('sun', this.sun);
+        this.registry.set('plantCooldowns', this.plantCooldowns);
     }
 
     createParticles() {
@@ -111,7 +124,11 @@ export class PlayScene extends Phaser.Scene {
 
                 const cell = this.add.rectangle(x, y, cellW - 12, cellW - 12, 0xffffff, 0);
                 cell.setInteractive();
-                cell.on('pointerdown', () => this.placePlant(r, c));
+                cell.on('pointerdown', (pointer) => {
+                    if (pointer.leftButtonDown()) {
+                        this.placePlant(r, c);
+                    }
+                });
                 cell.on('pointerover', () => cell.setFillStyle(0xffffff, 0.1));
                 cell.on('pointerout', () => cell.setFillStyle(0xffffff, 0));
 
@@ -224,10 +241,14 @@ export class PlayScene extends Phaser.Scene {
         if (!key) return;
 
         const data = PLANTS[key];
-        if (this.sun < data.cost || this.grid[row][col].plant) return;
+        const currentTime = this.time.now;
+        if (this.sun < data.cost || this.grid[row][col].plant || currentTime < this.plantCooldowns[key]) return;
 
         this.sun -= data.cost;
         this.registry.set('sun', this.sun);
+
+        this.plantCooldowns[key] = currentTime + data.cooldown;
+        this.registry.set('plantCooldowns', { ...this.plantCooldowns });
 
         const { x, y } = this.grid[row][col];
         const plant = this.add.sprite(x, y, key.toLowerCase());

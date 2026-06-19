@@ -9,14 +9,12 @@ export class UIScene extends Phaser.Scene {
     create() {
         const { width } = this.scale;
 
-        // Sun Bar Panel (Glassy)
         const panel = this.add.graphics();
         panel.fillStyle(0x000000, 0.7);
         panel.fillRoundedRect(15, 15, width - 30, 95, 20);
         panel.lineStyle(2, 0xffffff, 0.15);
         panel.strokeRoundedRect(15, 15, width - 30, 95, 20);
 
-        // Sun Count Section
         this.sunIcon = this.add.image(50, 62, 'sun').setScale(1.2);
 
         this.sunText = this.add.text(95, 62, '50', {
@@ -32,8 +30,20 @@ export class UIScene extends Phaser.Scene {
 
         this.registry.events.on('changedata-sun', (parent, value) => {
             this.sunText.setText(value);
-            this.updateCardAvailability(value);
+            this.updateCardStates();
         });
+
+        this.registry.events.on('changedata-plantCooldowns', () => {
+            this.updateCardStates();
+        });
+
+        this.registry.events.on('changedata-selectedPlant', (parent, value) => {
+            this.highlightCard(value);
+        });
+    }
+
+    update() {
+        this.updateCooldownVisuals();
     }
 
     createPlantCards() {
@@ -66,12 +76,22 @@ export class UIScene extends Phaser.Scene {
                 fontWeight: 'bold'
             }).setOrigin(0, 0.5);
 
-            card.add([bg, icon, nameText, costText]);
+            const cooldownOverlay = this.add.graphics();
+            const cooldownText = this.add.text(0, 0, '', {
+                fontSize: '28px',
+                fontFamily: 'Outfit',
+                fill: '#ffffff',
+                fontWeight: 'bold',
+                stroke: '#000000',
+                strokeThickness: 4
+            }).setOrigin(0.5);
+
+            card.add([bg, icon, nameText, costText, cooldownOverlay, cooldownText]);
             card.setSize(120, 85);
             card.setInteractive({ useHandCursor: true });
 
             card.on('pointerover', () => {
-                if (this.registry.get('sun') >= data.cost) {
+                if (this.isCardAvailable(key)) {
                     card.setScale(1.05);
                     this.drawCardBg(bg, 0x444444, 0.4);
                 }
@@ -79,21 +99,34 @@ export class UIScene extends Phaser.Scene {
 
             card.on('pointerout', () => {
                 card.setScale(1);
-                const isSelected = this.registry.get('selectedPlant') === key;
-                this.drawCardBg(bg, isSelected ? 0x4caf50 : 0x333333, isSelected ? 0.9 : 0.2);
+                this.updateCardBg(key);
             });
 
             card.on('pointerdown', () => {
-                if (this.registry.get('sun') >= data.cost) {
-                    this.registry.set('selectedPlant', key);
-                    this.highlightCard(key);
+                if (this.isCardAvailable(key)) {
+                    const currentSelected = this.registry.get('selectedPlant');
+                    this.registry.set('selectedPlant', currentSelected === key ? null : key);
                 }
             });
 
-            this.cards[key] = { card, bg };
+            this.cards[key] = { card, bg, icon, nameText, costText, cooldownOverlay, cooldownText, data };
         });
 
-        this.updateCardAvailability(this.registry.get('sun'));
+        this.updateCardStates();
+    }
+
+    isCardAvailable(key) {
+        const data = PLANTS[key];
+        const currentSun = this.registry.get('sun') || 0;
+        const cooldowns = this.registry.get('plantCooldowns') || {};
+        const now = this.time.now;
+        return currentSun >= data.cost && now >= (cooldowns[key] || 0);
+    }
+
+    isCardOnCooldown(key) {
+        const cooldowns = this.registry.get('plantCooldowns') || {};
+        const now = this.time.now;
+        return now < (cooldowns[key] || 0);
     }
 
     drawCardBg(graphics, color, lineAlpha) {
@@ -104,22 +137,67 @@ export class UIScene extends Phaser.Scene {
         graphics.strokeRoundedRect(-60, -42, 120, 84, 15);
     }
 
+    updateCardBg(key) {
+        const { bg } = this.cards[key];
+        const isSelected = this.registry.get('selectedPlant') === key;
+        const onCooldown = this.isCardOnCooldown(key);
+        if (onCooldown) {
+            this.drawCardBg(bg, 0x555555, 0.2);
+        } else {
+            this.drawCardBg(bg, isSelected ? 0x4caf50 : 0x333333, isSelected ? 0.9 : 0.2);
+        }
+    }
+
     highlightCard(selectedKey) {
         Object.keys(this.cards).forEach(key => {
-            const { bg } = this.cards[key];
-            const isSel = key === selectedKey;
-            this.drawCardBg(bg, isSel ? 0x4caf50 : 0x333333, isSel ? 0.9 : 0.2);
+            this.updateCardBg(key);
         });
     }
 
-    updateCardAvailability(currentSun) {
+    updateCardStates() {
         Object.keys(this.cards).forEach(key => {
-            const data = PLANTS[key];
-            const { card } = this.cards[key];
-            if (currentSun < data.cost) {
+            const { card, costText, data } = this.cards[key];
+            const currentSun = this.registry.get('sun') || 0;
+            const onCooldown = this.isCardOnCooldown(key);
+            const canAfford = currentSun >= data.cost;
+
+            if (!canAfford) {
                 card.setAlpha(0.55);
+                costText.setFill('#ff5555');
+            } else if (onCooldown) {
+                card.setAlpha(0.7);
+                costText.setFill('#ffd700');
             } else {
                 card.setAlpha(1);
+                costText.setFill('#ffd700');
+            }
+
+            this.updateCardBg(key);
+        });
+    }
+
+    updateCooldownVisuals() {
+        const now = this.time.now;
+        Object.keys(this.cards).forEach(key => {
+            const { cooldownOverlay, cooldownText, data } = this.cards[key];
+            const cooldowns = this.registry.get('plantCooldowns') || {};
+            const cooldownEnd = cooldowns[key] || 0;
+            const remaining = cooldownEnd - now;
+
+            cooldownOverlay.clear();
+
+            if (remaining > 0) {
+                const progress = 1 - (remaining / data.cooldown);
+                const fillHeight = 84 * (1 - progress);
+
+                cooldownOverlay.fillStyle(0x000000, 0.65);
+                cooldownOverlay.fillRect(-60, -42, 120, fillHeight);
+
+                const secondsLeft = Math.ceil(remaining / 1000);
+                cooldownText.setText(secondsLeft > 0 ? secondsLeft.toString() : '');
+                cooldownText.setVisible(true);
+            } else {
+                cooldownText.setVisible(false);
             }
         });
     }
