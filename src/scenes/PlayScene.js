@@ -18,6 +18,7 @@ export class PlayScene extends Phaser.Scene {
         this.zombieSpawnRate = config.zombieSpawnRate;
         this.zombiesSpawned = 0;
         this.zombiesTarget = config.waves;
+        this.cooldowns = {};
     }
 
     create() {
@@ -46,6 +47,18 @@ export class PlayScene extends Phaser.Scene {
         });
 
         this.registry.set('sun', this.sun);
+
+        const plantKeys = Object.keys(PLANTS);
+        plantKeys.forEach(key => {
+            this.cooldowns[key] = 0;
+        });
+        this.registry.set('cooldowns', this.cooldowns);
+
+        this.input.on('pointerdown', (pointer) => {
+            if (pointer.rightButtonDown() && this.registry.get('selectedPlant')) {
+                this.registry.set('selectedPlant', null);
+            }
+        });
     }
 
     createParticles() {
@@ -226,8 +239,14 @@ export class PlayScene extends Phaser.Scene {
         const data = PLANTS[key];
         if (this.sun < data.cost || this.grid[row][col].plant) return;
 
+        const now = this.time.now;
+        if (this.cooldowns[key] > now) return;
+
         this.sun -= data.cost;
         this.registry.set('sun', this.sun);
+
+        this.cooldowns[key] = now + data.cooldown;
+        this.registry.set('cooldowns', { ...this.cooldowns });
 
         const { x, y } = this.grid[row][col];
         const plant = this.add.sprite(x, y, key.toLowerCase());
