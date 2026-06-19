@@ -7,6 +7,8 @@ export class BootScene extends Phaser.Scene {
     }
 
     preload() {
+        this.game.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
         const loadingText = this.add.text(this.scale.width / 2, this.scale.height / 2, '正在生成现代资源...', {
             fontSize: '32px',
             fill: '#ffffff',
