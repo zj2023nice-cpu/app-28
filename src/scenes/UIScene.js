@@ -32,7 +32,15 @@ export class UIScene extends Phaser.Scene {
 
         this.registry.events.on('changedata-sun', (parent, value) => {
             this.sunText.setText(value);
-            this.updateCardAvailability(value);
+            this.refreshAllCards();
+        });
+
+        this.registry.events.on('changedata-cooldowns', () => {
+            this.refreshAllCards();
+        });
+
+        this.registry.events.on('changedata-selectedPlant', () => {
+            this.refreshAllCards();
         });
     }
 
@@ -66,12 +74,24 @@ export class UIScene extends Phaser.Scene {
                 fontWeight: 'bold'
             }).setOrigin(0, 0.5);
 
-            card.add([bg, icon, nameText, costText]);
+            // Cooldown overlay (drawn above content, below text)
+            const cooldownMask = this.add.graphics();
+
+            const cooldownText = this.add.text(0, 0, '', {
+                fontSize: '22px',
+                fontFamily: 'Outfit',
+                fill: '#ffffff',
+                fontWeight: 'bold',
+                stroke: '#000000',
+                strokeThickness: 4
+            }).setOrigin(0.5).setVisible(false);
+
+            card.add([bg, icon, nameText, costText, cooldownMask, cooldownText]);
             card.setSize(120, 85);
             card.setInteractive({ useHandCursor: true });
 
             card.on('pointerover', () => {
-                if (this.registry.get('sun') >= data.cost) {
+                if (this.isCardSelectable(key)) {
                     card.setScale(1.05);
                     this.drawCardBg(bg, 0x444444, 0.4);
                 }
@@ -79,21 +99,18 @@ export class UIScene extends Phaser.Scene {
 
             card.on('pointerout', () => {
                 card.setScale(1);
-                const isSelected = this.registry.get('selectedPlant') === key;
-                this.drawCardBg(bg, isSelected ? 0x4caf50 : 0x333333, isSelected ? 0.9 : 0.2);
+                this.refreshCard(key);
             });
 
             card.on('pointerdown', () => {
-                if (this.registry.get('sun') >= data.cost) {
-                    this.registry.set('selectedPlant', key);
-                    this.highlightCard(key);
-                }
+                if (!this.isCardSelectable(key)) return;
+                this.registry.set('selectedPlant', key);
             });
 
-            this.cards[key] = { card, bg };
+            this.cards[key] = { card, bg, cooldownMask, cooldownText, icon };
         });
 
-        this.updateCardAvailability(this.registry.get('sun'));
+        this.refreshAllCards();
     }
 
     drawCardBg(graphics, color, lineAlpha) {
@@ -104,23 +121,105 @@ export class UIScene extends Phaser.Scene {
         graphics.strokeRoundedRect(-60, -42, 120, 84, 15);
     }
 
-    highlightCard(selectedKey) {
-        Object.keys(this.cards).forEach(key => {
-            const { bg } = this.cards[key];
-            const isSel = key === selectedKey;
-            this.drawCardBg(bg, isSel ? 0x4caf50 : 0x333333, isSel ? 0.9 : 0.2);
-        });
+    isCardSelectable(key) {
+        const data = PLANTS[key];
+        const sun = this.registry.get('sun') || 0;
+        if (sun < data.cost) return false;
+        const cd = this.getCardCooldown(key);
+        if (cd.remaining > 0) return false;
+        return true;
     }
 
-    updateCardAvailability(currentSun) {
+    getCardCooldown(key) {
+        const cooldowns = this.registry.get('cooldowns') || {};
+        const entry = cooldowns[key];
+        if (!entry) return { remaining: 0, ratio: 0, total: PLANTS[key].cooldown };
+        const now = this.time.now;
+        const remaining = Math.max(0, entry.until - now);
+        const total = entry.total || PLANTS[key].cooldown;
+        const ratio = total > 0 ? remaining / total : 0;
+        return { remaining, ratio, total };
+    }
+
+    refreshAllCards() {
+        if (!this.cards) return;
+        Object.keys(this.cards).forEach(key => this.refreshCard(key));
+    }
+
+    refreshCard(key) {
+        const data = PLANTS[key];
+        const { card, bg, cooldownMask, cooldownText, icon } = this.cards[key];
+
+        const sun = this.registry.get('sun') || 0;
+        const selected = this.registry.get('selectedPlant') === key;
+        const cd = this.getCardCooldown(key);
+        const onCooldown = cd.remaining > 0;
+        const insufficientSun = sun < data.cost;
+
+        // Background color: selected (green) > cooldown (dark blue/grey) > insufficient (dim grey) > normal
+        if (selected && !onCooldown) {
+            this.drawCardBg(bg, 0x4caf50, 0.9);
+        } else if (onCooldown) {
+            this.drawCardBg(bg, 0x1a237e, 0.35);
+        } else if (insufficientSun) {
+            this.drawCardBg(bg, 0x333333, 0.15);
+        } else {
+            this.drawCardBg(bg, 0x333333, 0.2);
+        }
+
+        // Card alpha differentiates the two unavailable states
+        if (onCooldown) {
+            card.setAlpha(0.85);
+            icon.setTint(0x666688);
+        } else if (insufficientSun) {
+            card.setAlpha(0.55);
+            icon.clearTint();
+        } else {
+            card.setAlpha(1);
+            icon.clearTint();
+        }
+
+        // Cooldown progress overlay: vertical "fill drains down" mask
+        cooldownMask.clear();
+        if (onCooldown) {
+            const w = 120;
+            const h = 84;
+            const fillH = h * cd.ratio;
+            cooldownMask.fillStyle(0x000000, 0.55);
+            cooldownMask.fillRoundedRect(-60, -42, w, fillH, { tl: 15, tr: 15, bl: 0, br: 0 });
+            cooldownMask.lineStyle(2, 0x82b1ff, 0.7);
+            cooldownMask.beginPath();
+            cooldownMask.moveTo(-60, -42 + fillH);
+            cooldownMask.lineTo(60, -42 + fillH);
+            cooldownMask.strokePath();
+
+            cooldownText.setVisible(true);
+            const seconds = (cd.remaining / 1000).toFixed(1);
+            cooldownText.setText(seconds);
+        } else {
+            cooldownText.setVisible(false);
+        }
+    }
+
+    update() {
+        if (!this.cards) return;
+        // Drive cooldown progress animation; also auto-clear stale cooldown entries.
+        const cooldowns = this.registry.get('cooldowns');
+        if (!cooldowns) return;
+
+        let cleared = false;
         Object.keys(this.cards).forEach(key => {
-            const data = PLANTS[key];
-            const { card } = this.cards[key];
-            if (currentSun < data.cost) {
-                card.setAlpha(0.55);
-            } else {
-                card.setAlpha(1);
+            const cd = this.getCardCooldown(key);
+            if (cd.remaining > 0) {
+                this.refreshCard(key);
+            } else if (cooldowns[key] && cooldowns[key].until > 0) {
+                cooldowns[key].until = 0;
+                cleared = true;
             }
         });
+
+        if (cleared) {
+            this.registry.set('cooldowns', { ...cooldowns });
+        }
     }
 }

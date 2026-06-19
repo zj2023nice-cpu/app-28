@@ -18,6 +18,13 @@ export class PlayScene extends Phaser.Scene {
         this.zombieSpawnRate = config.zombieSpawnRate;
         this.zombiesSpawned = 0;
         this.zombiesTarget = config.waves;
+
+        const initialCooldowns = {};
+        Object.keys(PLANTS).forEach(key => {
+            initialCooldowns[key] = { until: 0, total: PLANTS[key].cooldown };
+        });
+        this.registry.set('cooldowns', initialCooldowns);
+        this.registry.set('selectedPlant', null);
     }
 
     create() {
@@ -224,6 +231,10 @@ export class PlayScene extends Phaser.Scene {
         if (!key) return;
 
         const data = PLANTS[key];
+        const cooldowns = this.registry.get('cooldowns') || {};
+        const cdEntry = cooldowns[key];
+        const now = this.time.now;
+        if (cdEntry && now < cdEntry.until) return;
         if (this.sun < data.cost || this.grid[row][col].plant) return;
 
         this.sun -= data.cost;
@@ -264,6 +275,14 @@ export class PlayScene extends Phaser.Scene {
 
         plant.setScale(0).setAlpha(0);
         this.tweens.add({ targets: plant, scale: 1, alpha: 1, duration: 400, ease: 'Back.out' });
+
+        const updatedCooldowns = { ...(this.registry.get('cooldowns') || {}) };
+        updatedCooldowns[key] = {
+            until: this.time.now + data.cooldown,
+            total: data.cooldown
+        };
+        this.registry.set('cooldowns', updatedCooldowns);
+
         this.registry.set('selectedPlant', null);
     }
 
